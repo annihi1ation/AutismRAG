@@ -1,0 +1,65 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+*.egg
+dist/
+build/
+.eggs/
+*.whl
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Local tool state
+.claude/
+
+# Local datasets / downloaded corpora
+data/
+testbase/
+text/
+JARID/
+JIDR_collection_DOI_named/
+profiles*.csv
+*.csv
+*.tsv
+*.xlsx
+*.xls
+*.parquet
+*.jsonl
+*.ndjson
+*.pdf
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.gz
+
+# Secrets / API keys
+.env
+.env.*
+secrets.toml
+
+# Large output files (optional)
+output/

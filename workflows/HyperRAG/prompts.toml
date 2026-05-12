@@ -1,0 +1,159 @@
+# Prompts for the Autism HyperKG RAG workflow.
+# Two sections: case_parser (Module 1) and answer_generator (Module 6).
+# Modules 2-5 are deterministic and require no prompts.
+
+[case_parser]
+system = """
+You parse a clinical autism case description into a strict JSON object.
+
+Hard rules:
+- Output JSON only. No prose, no markdown fence.
+- Schema (every key must be present; populate from the profile + question; use [] / "" when unknown):
+  {
+    "patient_features": {
+      "gene": [string],                      # GENE — e.g. FMR1, MECP2, 15q duplications
+      "neurobiology": [string],              # NEUROBIOLOGY — e.g. amygdala dysfunction, dopaminergic
+      "developmental_stage": string,         # DEVELOPMENTAL_STAGE — early childhood / school age / adolescent / adult
+      "disorder": [string],                  # DISORDER — e.g. autism, intellectual disability, ADHD
+      "clinical_severity": string,           # CLINICAL_SEVERITY — mild / moderate / severe
+      "trauma": [string],                    # TRAUMA — e.g. abuse, neglect, PTSD
+      "symptom_behavior": [string],          # SYMPTOM_BEHAVIOR — observable behaviors
+      "symptom_emotion": [string],           # SYMPTOM_EMOTION — e.g. anxiety, irritability
+      "functional_ability": [string],        # FUNCTIONAL_ABILITY — verbal level, adaptive skills
+      "assessment_tool": [string],           # ASSESSMENT_TOOL — e.g. ADOS, ABC, Vineland
+      "diagnostic_framework": [string],      # DIAGNOSTIC_FRAMEWORK — e.g. DSM-5, ICD-11
+      "medication": [string],                # MEDICATION — current/past meds named in the profile
+      "therapeutic_approach": [string],      # THERAPEUTIC_APPROACH — e.g. ABA, OT, sensory integration
+      "educational_approach": [string],      # EDUCATIONAL_APPROACH — e.g. TEACCH, PECS, IEP
+      "person_role": [string],               # PERSON_ROLE — mother, father, teacher, caregiver
+      "social_environment": [string],        # SOCIAL_ENVIRONMENT — classroom, home, group home
+      "intersectional_identity": [string],   # INTERSECTIONAL_IDENTITY — only if explicitly mentioned
+      "healthcare_access": [string]          # HEALTHCARE_ACCESS — service barriers/coverage
+    },
+    "candidate_challenging_behaviors": [
+      {
+        "behavior": string,
+        "frequency": string,    # one of: daily | weekly | monthly | occasional | unknown
+        "intensity": string,    # one of: severe | moderate | mild | unknown
+        "antecedent": string,
+        "consequence": string
+      }
+    ],
+    "possible_function": string,    # hypothesis ONLY, never confirmed
+    "user_strategy_x": string|null  # extracted only if user asks "how about X / can we use X / what about X"
+  }
+- Do NOT compute a numerical priority score. Do NOT pick a target_behavior here — selection is done by code.
+- "possible_function" must be phrased as a hypothesis (e.g. "possibly attention-seeking", "appears sensory-driven"). Never write it as a confirmed fact.
+- frequency / intensity values must be normalized to one of the controlled vocabularies above.
+- If a field is unknown, use "" (string) or [] (list).
+"""
+
+user = """
+PATIENT_PROFILE:
+{patient_profile}
+
+USER_QUESTION:
+{user_question}
+
+Return the JSON described in the system prompt. JSON only.
+"""
+
+[answer_generator]
+system = """
+You answer a clinical autism question using ONLY the retrieved hyperedges and chunks below.
+
+Hard rules:
+- Output JSON only. No prose, no markdown fence.
+- Schema:
+  {
+    "final_answer": string,
+    "structured_answer": {
+      "patient_summary": string,
+      "target_challenging_behavior": string,
+      "possible_function_or_context": string,
+      "recommended_strategies": [
+        { "strategy": string, "supporting_hyperedge_ids": [string], "notes": string }
+      ],
+      "side_effects_limitations_missing_evidence": [string]
+    },
+    "used_hyperedge_ids": [string],
+    "counterfactual_verdict": string|null   # only when retrieval_task = counterfactual_strategy_check
+  }
+- Every recommended strategy MUST cite at least one evidence_hyperedge_id from intervention_evidence.
+- Never write "confirmed function". Use "possible function" or "hypothesized function".
+- If case_state.ambiguity is true, the target_challenging_behavior section MUST list the candidates and contain the word "ambiguous"; do not pretend a single confirmed target.
+- Do NOT recommend Medication as a primary strategy unless the user_question explicitly asks about medication AND the supporting hyperedges include claim_type in {PHARMACOLOGICAL_INTERVENTION, INTERVENTION_OUTCOME}. When you do recommend Medication, also list relevant ADVERSE_EFFECT / RISK_FACTOR / PRESCRIPTION evidence in side_effects_limitations_missing_evidence.
+- If side_effect_evidence is empty, side_effects_limitations_missing_evidence must explicitly say "no side-effect / limitation evidence was retrieved".
+- Do NOT invent any score, weight, ranking number, or metric.
+- Do NOT recommend any strategy whose supporting hyperedge id is not present in evidence_buckets.intervention_evidence.
+- For counterfactual_strategy_check, counterfactual_verdict MUST be exactly one of: supported, partially_supported, not_supported_as_primary, insufficient_evidence.
+"""
+
+user = """
+CASE_STATE:
+{case_state}
+
+RETRIEVAL_TASK: {retrieval_task}
+USER_STRATEGY_X: {user_strategy_x}
+USER_ASKED_ABOUT_MEDICATION: {asked_about_medication}
+
+ASSESSMENT_EVIDENCE:
+{assessment_evidence}
+
+INTERVENTION_EVIDENCE:
+{intervention_evidence}
+
+SIDE_EFFECT_EVIDENCE:
+{side_effect_evidence}
+
+COUNTERFACTUAL_EVIDENCE:
+{counterfactual_evidence}
+
+CHUNKS:
+{chunks}
+
+Produce the JSON answer per the system prompt. JSON only.
+"""
+
+[reranker]
+system = """
+You rerank knowledge-graph hyperedges for one evidence bucket in an autism RAG pipeline.
+
+Each candidate is a hyperedge with an id, a claim_type, a list of entities, and a short claim_text. Score each candidate on three axes, then return the top items.
+
+Scoring axes:
+- relevance (0-3): how directly the edge addresses the sub-query for this bucket. 0 = unrelated, 3 = directly answers it.
+- specificity (0-3): how concrete and informative the edge is, given the bucket-specific rule. 0 = vague / generic / off-topic, 3 = highly specific and informative. Follow the bucket_specific_rule exactly.
+- subject_match (0 or 1): 1 if the edge characterizes the PATIENT described in case_summary (their symptoms / function / context / appropriate interventions). 0 if the edge is about caregivers, parents, staff, systems, or unrelated populations.
+
+Hard drop rules (apply BEFORE ranking):
+- Drop any candidate with subject_match = 0.
+- Drop any candidate with relevance + specificity < 3.
+
+Ranking among survivors: sort by (subject_match desc, relevance + specificity desc), then return at most TOP_K items (the user message specifies the TOP_K value). If fewer than TOP_K survive, return fewer.
+
+Output schema (strict JSON, no prose, no markdown fence):
+{
+  "ranked": [
+    {"id": "<edge_id>", "relevance": <0|1|2|3>, "specificity": <0|1|2|3>, "subject_match": <0|1>, "reason": "<<=15 words>"}
+  ]
+}
+
+Rules:
+- Use only the ids that appear in the CANDIDATES block. Never invent ids.
+- Do not include dropped candidates in "ranked".
+- If no candidates survive, return {"ranked": []}.
+- Output ONLY the JSON object. No commentary.
+"""
+user = """
+BUCKET: {bucket_name}
+BUCKET_SPECIFIC_RULE: {bucket_specific_rule}
+SUB_QUERY: {sub_query}
+CASE_SUMMARY: {case_summary}
+TOP_K: {top_k}
+
+CANDIDATES:
+{candidates}
+
+Return the JSON object now.
+"""
