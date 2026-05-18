@@ -1,0 +1,15 @@
+# HyperKGCreator dependencies (most are already in the repo root requirements.txt).
+# Required:
+pydantic>=2.0
+numpy>=1.23
+PyMuPDF>=1.23          # PDF parsing (fitz). Needed for `parse` / `build-*`.
+
+# Optional (graceful fallbacks exist if absent):
+sentence-transformers>=2.2   # real embedding backend (HKG_FAKE_EMBEDDINGS bypasses it)
+faiss-cpu                    # faster vector search; falls back to numpy cosine
+scikit-learn                 # alternate ANN backend fallback
+spacy                        # better mention extraction; phrase-window fallback otherwise
+PyYAML                       # YAML config files; JSON works without it
+
+# Tests:
+pytest>=7.0
